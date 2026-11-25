@@ -146,8 +146,14 @@ def create_server(
         task_id = coordinator.add_task(project, title, acceptance_criteria, dependencies, write_scope)
         return {"task_id": task_id}
 
+    @server.tool(name="tasks.claim", structured_output=True)
+    def claim(project: str, task_id: str, agent: str, session_id: str) -> ClaimResult:
+        """Claim the specified task, or return a null task_id if it cannot be claimed."""
+        return {"task_id": coordinator.claim(project, task_id, agent, session_id)}
+
     @server.tool(name="tasks.claim_next", structured_output=True)
     def claim_next(project: str, agent: str, session_id: str) -> ClaimResult:
+        """Return the agent's active task or claim the next eligible task by ID order."""
         return {"task_id": coordinator.claim_next(project, agent, session_id)}
 
     @server.tool(name="tasks.heartbeat", structured_output=True)

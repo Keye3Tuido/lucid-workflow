@@ -40,8 +40,10 @@ class CoordinationExperiments(unittest.TestCase):
     def task(self, task_id):
         return next(item for item in self.coordinator.tasks(self.project) if item["id"] == task_id)
 
-    def claim(self, agent_index):
+    def claim(self, agent_index, task_id=None):
         agent, session = self.agents[agent_index]
+        if task_id is not None:
+            return self.coordinator.claim(self.project, task_id, agent, session)
         return self.coordinator.claim_next(self.project, agent, session)
 
     def complete(self, agent_index, task_id):
@@ -93,6 +95,69 @@ class CoordinationExperiments(unittest.TestCase):
         self.assertIn(task["executor"], {"A", "B", "C"})
         claims = [event for event in self.coordinator.events(self.project) if event["action"] == "claimed"]
         self.assertEqual(len(claims), 1)
+
+    def test_claim_by_id_skips_earlier_tasks_and_keeps_one_active_task_per_agent(self):
+        first = self.add_task("排在前面")
+        target = self.add_task("指定任务")
+
+        self.assertIsNone(self.claim(0, "TASK-999"))
+        self.assertIsNone(self.coordinator.claim("other-project", target, "A", "session-a"))
+        self.assertEqual(self.claim(0, target), target)
+        self.assertEqual(self.task(first)["status"], "todo")
+        self.assertEqual(self.task(target)["session_id"], "session-a")
+        lease = self.task(target)["lease_until"]
+        self.clock.advance(1)
+        self.assertEqual(self.claim(0, target), target)
+        self.assertEqual(self.task(target)["lease_until"], lease)
+        self.assertIsNone(self.claim(0, first))
+        self.assertEqual(self.claim(0), target)
+        self.assertEqual(self.claim(1), first)
+        self.complete(0, target)
+        self.assertIsNone(self.claim(2, target))
+        self.coordinator.accept(self.project, [target], "用户已验收")
+        self.assertIsNone(self.claim(2, target))
+        claims = [event["task_id"] for event in self.coordinator.events(self.project) if event["action"] == "claimed"]
+        self.assertEqual(claims, [target, first])
+
+    def test_claim_by_id_respects_dependencies_and_write_scope(self):
+        prerequisite = self.add_task("前置任务")
+        conflicting = self.add_task("同范围任务", write_scope="shared")
+        target = self.add_task("指定任务", dependencies=[prerequisite], write_scope="shared")
+
+        self.assertIsNone(self.claim(0, target))
+        self.assertEqual(self.claim(1, prerequisite), prerequisite)
+        self.assertEqual(self.claim(2, conflicting), conflicting)
+        self.complete(1, prerequisite)
+        self.assertIsNone(self.claim(0, target))
+        self.complete(2, conflicting)
+        self.assertEqual(self.claim(0, target), target)
+
+    def test_claim_by_id_and_claim_next_race_for_one_task(self):
+        target = self.add_task("唯一任务")
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            attempts = [pool.submit(self.claim, index, task_id) for index, task_id in enumerate((target, target, None))]
+            results = [attempt.result() for attempt in attempts]
+        self.assertEqual([value for value in results if value], [target])
+        self.assertEqual(self.task(target)["executor"], self.agents[results.index(target)][0])
+        claims = [event for event in self.coordinator.events(self.project) if event["action"] == "claimed"]
+        self.assertEqual(len(claims), 1)
+
+    def test_claim_by_id_takes_over_only_the_requested_expired_task(self):
+        first = self.add_task("其他过期任务", write_scope="shared")
+        target = self.add_task("指定的过期任务")
+        self.assertEqual(self.claim(0, first), first)
+        self.assertEqual(self.claim(1, target), target)
+        self.assertIsNone(self.claim(2, target))
+
+        self.clock.advance(30)
+        self.assertEqual(self.claim(2, target), target)
+        with self.assertRaises(LeaseLost):
+            self.complete(1, target)
+        self.assertEqual(self.task(target)["executor"], "C")
+        self.assertEqual(self.task(first)["executor"], "A")
+        expired = [event["task_id"] for event in self.coordinator.events(self.project) if event["action"] == "lease_expired"]
+        self.assertEqual(expired, [target])
+        self.assertEqual(self.claim(0), first)
 
     def test_three_agents_respect_scope_and_unlock_dependency(self):
         first = self.add_task("支付恢复", write_scope="payment")

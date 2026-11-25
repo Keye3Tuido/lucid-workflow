@@ -65,7 +65,7 @@ Windows 使用虚拟环境的 `Scripts/python.exe`，服务状态根目录为 `%
 | --- | --- |
 | 会话与检查点 | `workflow.bootstrap` 恢复要求、任务和开放问题；`workflow.status` 查询状态；`workflow.checkpoint` 按明确用户证据验收并清理对应任务 |
 | 要求 | `requirements.list`、`requirements.upsert`、`requirements.remove`、`requirements.review`，复用现有 YAML 校验、锁和审计 |
-| 任务 | `tasks.add`、`tasks.claim_next`、`tasks.heartbeat`、`tasks.complete`、`tasks.set_blocked`、`tasks.accept`、`tasks.clean_accepted`、`tasks.list` |
+| 任务 | `tasks.add`、`tasks.claim`、`tasks.claim_next`、`tasks.heartbeat`、`tasks.complete`、`tasks.set_blocked`、`tasks.accept`、`tasks.clean_accepted`、`tasks.list` |
 | 问题 | `questions.ask`、`questions.answer`、`questions.list`；项目级完全重复提问复用原记录 |
 | Forest | `forest.locate` 定向返回文件、模块和行号；`forest.validate` 执行现有结构检查 |
 | 透明审计 | `events.list` 查询协调事件，不重复保存完整验收原话 |
@@ -73,6 +73,9 @@ Windows 使用虚拟环境的 `Scripts/python.exe`，服务状态根目录为 `%
 所有工具使用明确的输入、输出类型和结构化结果。任务创建必须有非空 `acceptance_criteria`，完成必须有验证证据，验收必须有用户证据和明确任务范围。
 
 任务只允许 `todo → working → done → accepted`。持有有效租约的执行者才能续期或完成；过期任务可被接管，旧执行者随后写入会被拒绝。依赖为 `done` 或 `accepted` 后，后续任务自动具备认领条件。相同非空 `write_scope` 的活跃任务互斥；当前只实现精确范围字符串，不是完整路径包含分析。
+
+- 已知任务 ID 时，调用 `tasks.claim(project, task_id, agent, session_id)`。成功返回 `{"task_id": "TASK-002"}`；目标不存在、不可认领或该执行者在同一项目已有另一项有效认领时，返回 `{"task_id": null}`，不改领其他任务。执行者重试认领自己仍持有的同一任务时，返回该 ID，不延长租约。
+- 按队列取任务时，调用 `tasks.claim_next(project, agent, session_id)`。执行者已有有效认领时返回该任务，否则按 ID 顺序认领第一项符合条件的任务；没有符合条件的任务时返回 `{"task_id": null}`。
 
 ## 项目内外文件边界
 

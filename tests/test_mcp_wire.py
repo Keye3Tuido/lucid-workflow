@@ -164,6 +164,26 @@ class McpWireExperiments(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len([event for event in events if event["action"] == "claimed"]), 1)
 
     @with_clients
+    async def test_http_claim_by_id_only_claims_the_requested_task(self):
+        tools = {tool.name: tool for tool in (await self.clients[0].list_tools()).tools}
+        self.assertCountEqual(
+            tools["tasks.claim"].input_schema["required"], ["project", "task_id", "agent", "session_id"]
+        )
+        first = await self.add_task("排在前面")
+        target = await self.add_task("指定任务")
+
+        async def claim_target(index, task_id):
+            agent, session = self.identities[index]
+            return self.data(await self.call(index, "tasks.claim", {
+                "project": self.project, "task_id": task_id, "agent": agent, "session_id": session,
+            }))
+
+        claimed, duplicate = await asyncio.gather(claim_target(0, target), claim_target(1, target))
+        self.assertCountEqual([claimed["task_id"], duplicate["task_id"]], [target, None])
+        self.assertEqual(await claim_target(2, "TASK-999"), {"task_id": None})
+        self.assertEqual(await self.claim(2), first)
+
+    @with_clients
     async def test_three_http_clients_unlock_and_race_for_dependency(self):
         roots = [await self.add_task(f"前置 {index}") for index in range(3)]
         dependent = await self.add_task("汇合任务", dependencies=roots)

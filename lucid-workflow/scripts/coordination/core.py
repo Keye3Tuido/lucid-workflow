@@ -194,8 +194,16 @@ class Coordinator:
             return task_id
 
     def claim_next(self, project: str, agent: str, session_id: str) -> str | None:
-        now = self.clock()
+        return self._claim(project, agent, session_id)
+
+    def claim(self, project: str, task_id: str, agent: str, session_id: str) -> str | None:
+        return self._claim(project, agent, session_id, task_id=task_id)
+
+    def _claim(
+        self, project: str, agent: str, session_id: str, *, task_id: str | None = None
+    ) -> str | None:
         with self._write() as connection:
+            now = self.clock()
             active = connection.execute(
                 """
                 SELECT id FROM tasks
@@ -204,10 +212,14 @@ class Coordinator:
                 (project, agent, now),
             ).fetchone()
             if active:
-                return active["id"]
+                return active["id"] if task_id is None or active["id"] == task_id else None
             expired = connection.execute(
-                "SELECT id, executor FROM tasks WHERE project = ? AND status = 'working' AND lease_until <= ?",
-                (project, now),
+                """
+                SELECT id, executor FROM tasks
+                WHERE project = ? AND status = 'working' AND lease_until <= ?
+                  AND (? IS NULL OR id = ?)
+                """,
+                (project, now, task_id, task_id),
             ).fetchall()
             for task in expired:
                 connection.execute(
@@ -229,6 +241,7 @@ class Coordinator:
                 """
                 SELECT T.id FROM tasks AS T
                 WHERE T.project = ? AND T.status = 'todo'
+                  AND (? IS NULL OR T.id = ?)
                   AND NOT EXISTS (
                       SELECT 1 FROM dependencies AS D
                       JOIN tasks AS P ON P.project = D.project AND P.id = D.dependency_id
@@ -244,7 +257,7 @@ class Coordinator:
                   )
                 ORDER BY T.id LIMIT 1
                 """,
-                (project, now),
+                (project, task_id, task_id, now),
             ).fetchone()
             if not candidate:
                 return None
